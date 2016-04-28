@@ -272,11 +272,11 @@ class Router1:
 						self.mac_to_port[packet.src] = packet_in.in_port
 						if dst_ip in self.ip_to_macandport.keys():
 							packet.src = packet.dst
-							packet.dst = adr.EthAddr(self.ip_to_macandport[str(dst_ip)][0])
+							packet.dst = adr.EthAddr(self.ip_to_macandport[str(dst_ip)][1])
 							
 							msg = of.ofp_packet_out()
 							msg.data = packet.pack()
-							action = of.ofp_action_output(port = self.ip_to_macandport[str(dst_ip)][1])
+							action = of.ofp_action_output(port = self.ip_to_macandport[str(dst_ip)][0])
 							msg.actions.append(action)
 							self.connection.send(msg)
 							log.info("within the same network:")
