@@ -12,7 +12,7 @@ class Router1 (object):
 	A Router1 object is created for each switch that connects.
 	A Connection object for that switch is passed to the __init__ function.
 	"""
-	arpcache = {}
+
 	
 	def __init__ (self, connection):
 		# Keep track of the connection to the switch so that we can
@@ -68,6 +68,75 @@ class Router1 (object):
 		self.connection.send(msg)
 		log.debug("arp reply !")
 	
+	def icmp_reply (self, packet, packet_in):
+		icmp_packet = packet.payload.payload 
+		src_ip = packet.payload.srcip
+		dst_ip = packet.payload.dstip
+		
+		ech = pkt.echo()
+		ech.seq = icmp_packet.payload.seq + 1
+		ech.id = icmp_packet.payload.id
+		
+		icmp_reply = pkt.icmp()
+		icmp_reply.type = pkt.TYPE_ECHO_REPLY
+		icmp_reply.payload = ech
+		
+		ip_p = pkt.ipv4()
+		ip_p.srcip = dst_ip
+		ip_p.dstip = src_ip
+		ip_p.protocol = pkt.ipv4.ICMP_PROTOCOL
+		ip_p.payload = icmp_reply
+		
+		eth_p = pkt.ethernet()
+		eth_p.type = pkt.ethernet.IP_TYPE
+		eth_p.dst = packet.src
+		eth_p.src = packet.dst
+		eth_p.payload = ip_p
+		
+		msg = of.ofp_packet_out()
+		msg.data = eth_p.pack()
+		
+		action = of.ofp_action_output(port = packet_in.in_port)
+		msg.actions.append(action)
+		
+		self.connection.send(msg)
+		log.debug("ICMP reply sent")
+		
+		
+	def icmp_unreach (self, packet, packet_in):
+		log.debug("ICMP destination unreachable")
+		ip_packet = packet.payload 
+		unr = pkt.unreach()
+		unr.payload = ip_packet
+		src_ip = packet.payload.srcip
+		dst_ip = packet.payload.dstip
+		
+		icmp_reply = pkt.icmp()
+		icmp_reply.type = pkt.TYPE_DEST_UNREACH
+		icmp_reply.payload = unr
+		
+		ip_p = pkt.ipv4()
+		ip_p.srcip = dst_ip
+		ip_p.dstip = src_ip
+		ip_p.protocol = pkt.ipv4.ICMP_PROTOCOL
+		ip_p.payload = icmp_reply
+		
+		eth_p = pkt.ethernet()
+		eth_p.type = pkt.ethernet.IP_TYPE
+		eth_p.dst = packet.src
+		eth_p.src = packet.dst
+		eth_p.payload = ip_p
+		
+		msg = of.ofp_packet_out()
+		msg.data = eth_p.pack()
+		
+		action = of.ofp_action_output(port = packet_in.in_port)
+		msg.actions.append(action)
+		
+		self.connection.send(msg)
+		log.debug("ICMP unreachable reply sent")
+	
+	
 	def act_like_router (self, packet, packet_in):
 		self.mac_to_port[packet.src] = packet_in.in_port
 		if packet.type == packet.ARP_TYPE:
@@ -79,91 +148,60 @@ class Router1 (object):
 			# ARP reply
 			elif packet.payload.opcode == arp.REPLY:
 				log.debug("An arp reply coming in!")
-				arpcache[packet.src] = packet.payload.protosrc
 				self.mac_to_port[packet.src] = packet_in.in_port
 				
 		# static routing
 		elif packet.type == pkt.ethernet.IP_TYPE:
 			log.debug("An ip packet coming in!")
 			ip_packet = packet.payload
+			src_ip = ip_packet.srcip
+			dst_ip = ip_packet.dstip
+			
 			if ip_packet.protocol == pkt.ipv4.ICMP_PROTOCOL:
 				icmp_packet = ip_packet.payload 				
 	
 				if icmp_packet.type == pkt.TYPE_ECHO_REQUEST:
-					log.debug("ICMP request received")
-					src_ip = ip_packet.srcip
-					dst_ip = ip_packet.dstip						
+					log.debug("ICMP request received")											
 					k = 0
 					for key in self.routing_table.keys():
 						if dst_ip.inNetwork(key):
 							k = key
 							break
 					if k != 0:
-						
-						log.debug("network containing host:"+k)
-						ech = pkt.echo()
-						ech.seq = icmp_packet.payload.seq + 1
-						ech.id = icmp_packet.payload.id
-						
-						icmp_reply = pkt.icmp()
-						icmp_reply.type = pkt.TYPE_ECHO_REPLY
-						icmp_reply.payload = ech
-						
-						ip_p = pkt.ipv4()
-						ip_p.srcip = dst_ip
-						ip_p.dstip = src_ip
-						ip_p.protocol = pkt.ipv4.ICMP_PROTOCOL
-						ip_p.payload = icmp_reply
-						
-						eth_p = pkt.ethernet()
-						eth_p.type = pkt.ethernet.IP_TYPE
-						eth_p.dst = packet.src
-						eth_p.src = packet.dst
-						eth_p.payload = ip_p
-						
-						msg = of.ofp_packet_out()
-						msg.data = eth_p.pack()
-						
-						action = of.ofp_action_output(port = packet_in.in_port)
-						msg.actions.append(action)
-						
-						self.connection.send(msg)
-						log.debug("ICMP reply sent")
-					
+						if dst_ip in self.ip_to_port.keys():
+							self.icmp_reply(packet, packet_in)	
+						else:
+							packet.src = packet.dst
+							packet.dst = adr.EthAddr(self.routing_table[k][4])
+							
+							msg = of.ofp_packet_out()
+							msg.data = packet.pack()
+							action = of.ofp_action_output(port = self.routing_table[k][3])
+							msg.actions.append(action)
+							self.connection.send(msg)
 					else:
-						log.debug("ICMP destination unreachable")
-						unr = pkt.unreach()
-						unr.payload = ip_packet
-						
-						icmp_reply = pkt.icmp()
-						icmp_reply.type = pkt.TYPE_DEST_UNREACH
-						icmp_reply.payload = unr
-						
-						ip_p = pkt.ipv4()
-						ip_p.srcip = dst_ip
-						ip_p.dstip = src_ip
-						ip_p.protocol = pkt.ipv4.ICMP_PROTOCOL
-						ip_p.payload = icmp_reply
-						
-						eth_p = pkt.ethernet()
-						eth_p.type = pkt.ethernet.IP_TYPE
-						eth_p.dst = packet.src
-						eth_p.src = packet.dst
-						eth_p.payload = ip_p
-						
-						msg = of.ofp_packet_out()
-						msg.data = eth_p.pack()
-						
-						action = of.ofp_action_output(port = packet_in.in_port)
-						msg.actions.append(action)
-						
-						self.connection.send(msg)
-						log.debug("ICMP unreachable reply sent")
-   				
+						self.icmp_unreach(packet, packet_in)   		
+				
+				else:
+					log.debug("ICMP reply received")	
+					k = 0
+					for key in self.routing_table.keys():
+						if dst_ip.inNetwork(key):
+							k = key
+							break
+					if k != 0:
+						if dst_ip not in self.ip_to_port.keys():
+							packet.src = packet.dst
+							packet.dst = adr.EthAddr(self.routing_table[k][4])
+							
+							msg = of.ofp_packet_out()
+							msg.data = packet.pack()
+							action = of.ofp_action_output(port = self.routing_table[k][3])
+							msg.actions.append(action)
+							self.connection.send(msg)
+					
 			else:
 				log.debug("A regular packet is received!")
-				src_ip = ip_packet.srcip
-				dst_ip = ip_packet.dstip
 				log.debug("src_ip: %s, dst_ip: %s", src_ip, dst_ip)
 				k = 0
 				for key in self.routing_table.keys():

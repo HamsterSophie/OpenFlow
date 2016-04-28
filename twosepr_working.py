@@ -36,8 +36,8 @@ class Router1:
 			self.macaddr = adr.EthAddr("00:00:00:00:01:01")
 			self.mac_to_port = {'00:00:00:00:00:01': 1,
 								'00:00:00:00:00:02': 2}
-			self.ip_to_macandport = {'10.0.1.2':['00:00:00:00:00:01', 1],
-									 '10.0.1.3':['00:00:00:00:00:02', 2]}			
+			self.ip_to_macandport = {'10.0.1.2':[1,'00:00:00:00:00:01'],
+									 '10.0.1.3':[2,'00:00:00:00:00:02']}			
 			self.routing_table = {'10.0.1.0/24': [0, '00:00:00:00:00:00'],
 								  '10.0.2.0/24': [3, '00:00:00:00:01:02'],
 				      			  '10.0.3.0/24': [3, '00:00:00:00:01:02']}
@@ -47,9 +47,9 @@ class Router1:
 			self.mac_to_port = {'00:00:00:00:00:03': 2,
 								'00:00:00:00:00:04': 3,
 								'00:00:00:00:00:05': 4}
-			self.ip_to_macandport = {'10.0.2.2':['00:00:00:00:00:03', 2],
-									 '10.0.2.3':['00:00:00:00:00:04', 3],
-								 	 '10.0.2.4':['00:00:00:00:00:05', 4]}		
+			self.ip_to_macandport = {'10.0.2.2':[2,'00:00:00:00:00:03'],
+									 '10.0.2.3':[3,'00:00:00:00:00:04'],
+								 	 '10.0.2.4':[4,'00:00:00:00:00:05']}		
 			self.routing_table = {'10.0.1.0/24': [1, '00:00:00:00:01:01'],
 								   '10.0.2.0/24': [0, '00:00:00:00:00:00'],
 							       '10.0.3.0/24': [1, '00:00:00:00:01:01']}
@@ -142,6 +142,15 @@ class Router1:
 				#in the same network
 				if src_ip in self.ip_to_macandport.keys() and  dst_ip in self.ip_to_macandport.keys():
 					log.debug("ARP:src and dst are in the same network")
+					packet.src = packet.dst
+					packet.dst = adr.EthAddr(self.ip_to_macandport[str(dst_ip)][1])
+					msg = of.ofp_packet_out()
+					msg.data = packet.pack()					
+					action = of.ofp_action_output(port = self.ip_to_macandport[str(dst_ip)][0])
+					msg.actions.append(action)
+					self.connection.send(msg)
+					'''
+					log.debug("ARP:src and dst are in the same network")
 					arp_reply = pkt.arp()					
 					arp_reply.hwsrc = adr.EthAddr(self.ip_to_macandport[str(dst_ip)][0])  #mac address of the router
 					arp_reply.hwdst = packet.src
@@ -160,6 +169,7 @@ class Router1:
 					action = of.ofp_action_output(port = packet_in.in_port)
 					msg.actions.append(action)
 					self.connection.send(msg)
+					'''
 
 				#reply be the router
 				else:				
@@ -185,16 +195,15 @@ class Router1:
 					log.debug("Arp replied by the router %s", arp_reply.hwsrc)
 			
 			# ARP reply
-			elif packet.payload.opcode == arp.REPLY:
+			elif packet.payload.opcode == pkt.arp.REPLY:
 				log.debug("a new Arp REPLY: from %s, to %s", src_ip, dst_ip)
-				arpcache[packet.src] = src_ip
-				self.mac_to_port[packet.src] = packet_in.in_port
 				if dst_ip in self.ip_to_macandport.keys():
 					log.debug("arp reply recieved by router %s and forward to the host", self.macaddr)
-					packet.dst = adr.EthAddr(self.ip_to_macandport[dst_ip][0])
+					packet.src = packet.dst
+					packet.dst = adr.EthAddr(self.ip_to_macandport[str(dst_ip)][1])
 					msg = of.ofp_packet_out()
 					msg.data = packet.pack()
-					action = of.ofp_action_output(port = self.ip_to_macandport[str(dst_ip)][1])
+					action = of.ofp_action_output(port = self.ip_to_macandport[str(dst_ip)][0])
 					msg.actions.append(action)
 					self.connection.send(msg)
 					
@@ -218,12 +227,33 @@ class Router1:
 					if k != 0:
 						#log.debug("ICMP reply sent")
 						#log.debug("network containing host:"+k)
-						self.icmp_reply(packet, packet_in)
+						if dst_ip in self.ip_to_macandport.keys():
+							log.debug("In the same network ICMP request should be forward")
+							packet.src = packet.dst
+							packet.dst = adr.EthAddr(self.ip_to_macandport[str(dst_ip)][1])
+							msg = of.ofp_packet_out()
+							msg.data = packet.pack()
+							action = of.ofp_action_output(port = self.ip_to_macandport[str(dst_ip)][0])
+							msg.actions.append(action)
+							self.connection.send(msg)
+						else:
+							self.icmp_reply(packet, packet_in)
 					
 					else:
 						#log.debug("ICMP destination unreachable")
 						self.icmp_unreach(packet, packet_in)
 						   			#regular packet is received
+				
+				else:
+					if dst_ip in self.ip_to_macandport.keys():
+						packet.src = packet.dst
+						packet.dst = adr.EthAddr(self.ip_to_macandport[str(dst_ip)][1])
+						msg = of.ofp_packet_out()
+						msg.data = packet.pack()
+						action = of.ofp_action_output(port = self.ip_to_macandport[str(dst_ip)][0])
+						msg.actions.append(action)
+						self.connection.send(msg)
+				
 			else:
 				log.debug("A regular packet is received!")
 				src_ip = ip_packet.srcip
